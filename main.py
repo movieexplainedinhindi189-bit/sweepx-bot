@@ -3,13 +3,28 @@ import time
 import requests
 import pandas as pd
 import json
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import threading
+
+# Render Free Web Service Dummy Server
+class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is Running 24/7!")
+
+def run_web_server():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(('0.0.0.0', port), SimpleHTTPRequestHandler)
+    server.serve_forever()
+
+threading.Thread(target=run_web_server, daemon=True).start()
 
 # Fetch Environment Variables
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 SYMBOLS = ["BTCUSDT", "ETHUSDT"]
-STATE_FILE = "bot_state.json"
 
 def send_telegram_message(message):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
@@ -96,12 +111,12 @@ def process_bot():
             send_telegram_message(msg)
 
 if __name__ == "__main__":
-    send_telegram_message("🚀 *SweepX Bot Render par Live Ho Gaya Hai!* 24/7 Monitoring Active.")
+    send_telegram_message("🚀 *SweepX Bot Render Web Service par Live Ho Gaya Hai!*")
     while True:
         try:
             process_bot()
-            time.sleep(300) # Check every 5 minutes
+            time.sleep(300)
         except Exception as e:
             print(f"Error in main loop: {e}")
             time.sleep(60)
-          
+            
