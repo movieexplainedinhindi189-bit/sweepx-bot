@@ -7,9 +7,8 @@ import requests
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from telegram import Update
-from telegram.ext import Updater, CommandHandler, CallbackContext
 
 # Environment Variables
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -17,7 +16,8 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 DELTA_API_KEY = os.getenv("DELTA_API_KEY")
 DELTA_API_SECRET = os.getenv("DELTA_API_SECRET")
 
-DELTA_BASE_URL = "https://api.delta.exchange"  # Delta Exchange Real API
+# Delta Exchange API URL (Demo / Testnet vs Real)
+DELTA_BASE_URL = os.getenv("DELTA_BASE_URL", "https://cdn.testnet.delta.exchange")
 
 # SMC Strategy Settings
 RISK_PERCENT = 0.02       # 2% Risk per trade
@@ -31,7 +31,7 @@ def generate_signature(method, endpoint, payload_str, timestamp):
     message = method + timestamp + endpoint + payload_str
     return hmac.new(DELTA_API_SECRET.encode('utf-8'), message.encode('utf-8'), hashlib.sha256).hexdigest()
 
-# Fetch Real Delta Exchange Balance
+# Fetch Delta Exchange Balance
 def get_delta_balance():
     try:
         endpoint = "/v2/wallet/balances"
@@ -51,6 +51,28 @@ def get_delta_balance():
     except Exception as e:
         print(f"Delta Balance API Error: {e}")
     return 117.0
+
+# Fetch Live Open Positions & PnL
+def get_live_positions():
+    try:
+        endpoint = "/v2/positions"
+        timestamp = str(int(time.time()))
+        sig = generate_signature("GET", endpoint, "", timestamp)
+        headers = {
+            'api-key': DELTA_API_KEY,
+            'signature': sig,
+            'timestamp': timestamp,
+            'Content-Type': 'application/json'
+        }
+        res = requests.get(DELTA_BASE_URL + endpoint, headers=headers).json()
+        if res.get('success'):
+            positions = res.get('result', [])
+            # Only active open positions
+            open_positions = [p for p in positions if float(p.get('size', 0)) != 0]
+            return open_positions
+    except Exception as e:
+        print(f"Delta Positions API Error: {e}")
+    return []
 
 # News Safeguard Filter (Cryptopanic)
 def is_high_impact_news_present():
@@ -86,22 +108,59 @@ def send_telegram_photo(photo_path, caption):
     except Exception as e:
         print(f"Telegram Photo Error: {e}")
 
-# /balance Command Handler
-def balance_command(update: Update, context: CallbackContext):
+# /start & /balance Command Handler
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     balance = get_delta_balance()
     news_status = "⚠️ Active High-Risk News" if is_high_impact_news_present() else "🟢 Safe Market Conditions"
     
     msg = (
-        f"🏛️ *PURE SMC INSTITUTIONAL BOT*\n\n"
-        f"💵 **Real Balance:** `${balance:.2f}` USDT\n"
+        f"🦈 *PRO SHARK SMC BOT IS ONLINE*\n\n"
+        f"💵 **Wallet Balance:** `${balance:.2f}` USDT\n"
         f"⚠️ **Risk Per Trade (2%):** `${balance * RISK_PERCENT:.2f}` USDT\n"
         f"⚡ **Leverage:** `{LEVERAGE}x`\n"
         f"🎯 **Trading Pairs:** `BTCUSDT & ETHUSDT`\n"
         f"📰 **News Status:** `{news_status}`\n"
         f"🔄 **Daily Trades Executed:** `{daily_trade_count}/{MAX_DAILY_TRADES}`\n"
-        f"🟢 **Engine Status:** 24/7 Scanning Active"
+        f"🟢 **Engine Status:** 24/7 Live Pure SMC Scanning\n\n"
+        f"💡 *Commands:* `/start` (Status) | `/pnl` (Live PnL & Positions)"
     )
-    update.message.reply_text(msg, parse_mode='Markdown')
+    await update.message.reply_text(msg, parse_mode='Markdown')
+
+# /pnl Command Handler
+async def pnl_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    positions = get_live_positions()
+    
+    if not positions:
+        await update.message.reply_text("📊 **No Active Open Positions Right Now.**\nBot is searching for pure SMC setups...", parse_mode='Markdown')
+        return
+
+    msg = "📈 *LIVE OPEN POSITIONS & PnL REPORT*\n\n"
+    total_unrealized_pnl = 0.0
+
+    for pos in positions:
+        symbol = pos.get('product_symbol', 'N/A')
+        size = float(pos.get('size', 0))
+        side = "LONG 🟢" if size > 0 else "SHORT 🔴"
+        entry_price = float(pos.get('entry_price', 0))
+        mark_price = float(pos.get('mark_price', 0))
+        unrealized_pnl = float(pos.get('unrealized_pnl', 0))
+        total_unrealized_pnl += unrealized_pnl
+        
+        pnl_icon = "🟢" if unrealized_pnl >= 0 else "🔴"
+        
+        msg += (
+            f"🔹 **Symbol:** `{symbol}` ({side})\n"
+            f"▫️ **Size:** `{abs(size)}` contracts\n"
+            f"▫️ **Entry Price:** `${entry_price:.2f}`\n"
+            f"▫️ **Mark Price:** `${mark_price:.2f}`\n"
+            f"▫️ **Unrealized PnL:** {pnl_icon} `${unrealized_pnl:.2f}` USDT\n"
+            f"-----------------------------------\n"
+        )
+        
+    pnl_overall_icon = "🚀" if total_unrealized_pnl >= 0 else "🔻"
+    msg += f"\n{pnl_overall_icon} **Total Live PnL:** `${total_unrealized_pnl:.2f}` USDT"
+    
+    await update.message.reply_text(msg, parse_mode='Markdown')
 
 # Market Data
 def fetch_klines(symbol, interval, limit=100):
@@ -193,7 +252,6 @@ def generate_pro_chart(df, symbol, side, entry, sl, tp1, tp2, tp3):
     fig, ax = plt.subplots(figsize=(10, 6), facecolor='#131722')
     ax.set_facecolor('#131722')
     
-    # Draw Candlesticks
     for i in range(len(df_slice)):
         open_p = df_slice['open'].iloc[i]
         close_p = df_slice['close'].iloc[i]
@@ -205,15 +263,12 @@ def generate_pro_chart(df, symbol, side, entry, sl, tp1, tp2, tp3):
         ax.plot([i, i], [low_p, high_p], color=color, linewidth=1.2)
         ax.add_patch(plt.Rectangle((i - 0.3, min(open_p, close_p)), 0.6, abs(close_p - open_p), color=color))
 
-    # Add TradingView Horizontal Lines & Target Zones
-    max_x = len(df_slice) + 3
     ax.axhline(y=entry, color='#2962ff', linestyle='-', linewidth=1.8, label=f'Entry: {entry:.2f}')
     ax.axhline(y=sl, color='#f23645', linestyle='--', linewidth=1.5, label=f'SL: {sl:.2f}')
     ax.axhline(y=tp1, color='#089981', linestyle=':', linewidth=1.2, label=f'TP1: {tp1:.2f}')
     ax.axhline(y=tp2, color='#089981', linestyle='--', linewidth=1.5, label=f'TP2: {tp2:.2f}')
     ax.axhline(y=tp3, color='#089981', linestyle='-', linewidth=1.8, label=f'TP3: {tp3:.2f}')
     
-    # Fill Target / Risk Zones
     if side == "LONG":
         ax.axhspan(entry, tp3, alpha=0.15, color='#089981')
         ax.axhspan(sl, entry, alpha=0.15, color='#f23645')
@@ -225,7 +280,6 @@ def generate_pro_chart(df, symbol, side, entry, sl, tp1, tp2, tp3):
     ax.tick_params(colors='white', labelsize=10)
     ax.grid(True, color='#2a2e39', linestyle='--', alpha=0.5)
     
-    # Custom Legend
     legend = ax.legend(loc='upper left', facecolor='#1e222d', edgecolor='none')
     for text in legend.get_texts():
         text.set_color('white')
@@ -255,7 +309,6 @@ def run_trading_bot():
         curr_price = df_5m['close'].iloc[-1]
         balance = get_delta_balance()
 
-        # BEARISH SHORT TRADE
         if trend_1h == "BEARISH" and smc_signal == "BEARISH_SMC_ENTRY":
             sl_price = df_5m['high'].iloc[-10:].max() * 1.002
             risk_dist = abs(curr_price - sl_price)
@@ -287,7 +340,6 @@ def run_trading_bot():
             if os.path.exists(chart):
                 os.remove(chart)
 
-        # BULLISH LONG TRADE
         elif trend_1h == "BULLISH" and smc_signal == "BULLISH_SMC_ENTRY":
             sl_price = df_5m['low'].iloc[-10:].min() * 0.998
             risk_dist = abs(curr_price - sl_price)
@@ -320,22 +372,16 @@ def run_trading_bot():
                 os.remove(chart)
 
 def main():
-    updater = Updater(TELEGRAM_TOKEN, use_context=True)
-    dp = updater.dispatcher
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     
-    dp.add_handler(CommandHandler("balance", balance_command))
+    # Handlers
+    app.add_handler(CommandHandler("start", start_command))
+    app.add_handler(CommandHandler("balance", start_command))
+    app.add_handler(CommandHandler("pnl", pnl_command))
     
-    send_telegram_msg("🦈 *PRO Shark SMC Engine Live! Alert format updated to Pro TradingView Style.*")
+    send_telegram_msg("🦈 *PRO Shark SMC Engine Live! Full Control Enabled.*")
     
-    updater.start_polling()
-    
-    while True:
-        try:
-            run_trading_bot()
-            time.sleep(300)
-        except Exception as e:
-            print(f"Loop Error: {e}")
-            time.sleep(60)
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
